@@ -1,0 +1,577 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude-in-the-Browser on Kubernetes — Architecture</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  :root {
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --surface-2: #eef1f5;
+    --ink: #171b24;
+    --ink-soft: #444c5c;
+    --ink-faint: #6b7688;
+    --border: #d9dee7;
+    --border-strong: #c2cad6;
+    --k8s: #2f5fd0;      /* control-plane / k8s blue */
+    --k8s-soft: #e6edfb;
+    --agent: #0f8a7a;    /* agent / model tier teal */
+    --agent-soft: #dff2ef;
+    --warn: #b26a00;
+    --warn-soft: #fbeed6;
+    --code-bg: #f0f2f6;
+    --diagram-bg: #ffffff; /* mermaid always sits on light */
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1016;
+      --surface: #161a22;
+      --surface-2: #1d222c;
+      --ink: #e7eaf0;
+      --ink-soft: #b3bcca;
+      --ink-faint: #808b9c;
+      --border: #262c38;
+      --border-strong: #333b49;
+      --k8s: #6f9bff;
+      --k8s-soft: #182338;
+      --agent: #3fc3b0;
+      --agent-soft: #10231f;
+      --warn: #e0a54a;
+      --warn-soft: #2a2013;
+      --code-bg: #1a1f29;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f6f7f9; --surface: #ffffff; --surface-2: #eef1f5; --ink: #171b24;
+    --ink-soft: #444c5c; --ink-faint: #6b7688; --border: #d9dee7; --border-strong: #c2cad6;
+    --k8s: #2f5fd0; --k8s-soft: #e6edfb; --agent: #0f8a7a; --agent-soft: #dff2ef;
+    --warn: #b26a00; --warn-soft: #fbeed6; --code-bg: #f0f2f6;
+  }
+  :root[data-theme="dark"] {
+    --bg: #0e1016; --surface: #161a22; --surface-2: #1d222c; --ink: #e7eaf0;
+    --ink-soft: #b3bcca; --ink-faint: #808b9c; --border: #262c38; --border-strong: #333b49;
+    --k8s: #6f9bff; --k8s-soft: #182338; --agent: #3fc3b0; --agent-soft: #10231f;
+    --warn: #e0a54a; --warn-soft: #2a2013; --code-bg: #1a1f29;
+  }
+
+  body { background: var(--bg); color: var(--ink); font-family: var(--sans);
+    line-height: 1.6; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 3.5rem 1.5rem 6rem; }
+
+  .eyebrow { font-family: var(--mono); font-size: .72rem; letter-spacing: .18em;
+    text-transform: uppercase; color: var(--k8s); font-weight: 600; margin: 0 0 .6rem; }
+  h1 { font-size: clamp(1.9rem, 4vw, 2.7rem); line-height: 1.1; margin: 0 0 .8rem;
+    letter-spacing: -.02em; text-wrap: balance; }
+  .lede { font-size: 1.12rem; color: var(--ink-soft); max-width: 62ch; margin: 0 0 1rem; }
+
+  h2 { font-size: 1.4rem; margin: 3.2rem 0 .4rem; letter-spacing: -.01em; padding-top: 1.6rem;
+    border-top: 1px solid var(--border); }
+  h2 .num { font-family: var(--mono); font-size: .9rem; color: var(--k8s); margin-right: .6rem; }
+  h3 { font-size: 1.05rem; margin: 1.8rem 0 .4rem; }
+  p { margin: .6rem 0; max-width: 66ch; }
+  strong { color: var(--ink); font-weight: 650; }
+
+  .diagram { background: var(--diagram-bg); border: 1px solid var(--border-strong);
+    border-radius: 12px; padding: 1.4rem; margin: 1.4rem 0; overflow-x: auto;
+    box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+  .diagram pre.mermaid { margin: 0; text-align: center; min-width: 620px; }
+  .cap { font-family: var(--mono); font-size: .74rem; color: var(--ink-faint);
+    text-transform: uppercase; letter-spacing: .1em; margin: .2rem 0 1.4rem; }
+
+  table { border-collapse: collapse; width: 100%; margin: 1.2rem 0; font-size: .93rem;
+    display: block; overflow-x: auto; }
+  th, td { text-align: left; padding: .6rem .8rem; border-bottom: 1px solid var(--border);
+    vertical-align: top; }
+  th { font-family: var(--mono); font-size: .72rem; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--ink-faint); border-bottom: 1px solid var(--border-strong); white-space: nowrap; }
+  tbody td:first-child { white-space: nowrap; }
+
+  code { font-family: var(--mono); font-size: .86em; background: var(--code-bg);
+    padding: .12em .4em; border-radius: 4px; }
+
+  .tiers { display: grid; gap: .8rem; margin: 1.4rem 0; }
+  @media (min-width: 640px) { .tiers { grid-template-columns: repeat(3, 1fr); } }
+  .tier { border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.1rem;
+    background: var(--surface); }
+  .tier h4 { margin: 0 0 .1rem; font-size: .98rem; }
+  .tier .where { font-family: var(--mono); font-size: .72rem; color: var(--ink-faint);
+    text-transform: uppercase; letter-spacing: .06em; margin: 0 0 .5rem; }
+  .tier ul { margin: .3rem 0 0; padding-left: 1.1rem; font-size: .88rem; color: var(--ink-soft); }
+  .tier li { margin: .2rem 0; }
+  .tier.k8s { border-top: 3px solid var(--k8s); }
+  .tier.agent { border-top: 3px solid var(--agent); }
+  .tier.client { border-top: 3px solid var(--warn); }
+
+  .callout { border: 1px solid var(--border-strong); border-left: 3px solid var(--k8s);
+    background: var(--surface); border-radius: 8px; padding: 1rem 1.1rem; margin: 1.4rem 0; }
+  .callout.agent { border-left-color: var(--agent); }
+  .callout .k { font-family: var(--mono); font-size: .72rem; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-faint); display: block; margin-bottom: .3rem; }
+
+  .pill { display: inline-block; font-family: var(--mono); font-size: .7rem; padding: .12em .5em;
+    border-radius: 20px; letter-spacing: .04em; vertical-align: middle; }
+  .pill.tbd { background: var(--warn-soft); color: var(--warn); }
+  .pill.set { background: var(--agent-soft); color: var(--agent); }
+
+  .appendix { margin-top: 4rem; padding: 2rem 1.6rem; background: var(--surface-2);
+    border-radius: 14px; border: 1px solid var(--border); }
+  .appendix h2 { border-top: none; padding-top: 0; margin-top: 0; }
+  .footnote { font-size: .85rem; color: var(--ink-faint); margin-top: 2rem; }
+
+  ul.why { list-style: none; margin: .6rem 0 1.2rem; padding: 0; display: grid; gap: .55rem; max-width: 66ch; }
+  ul.why li { position: relative; padding-left: 1.4rem; color: var(--ink-soft); font-size: .95rem; }
+  ul.why li::before { content: "→"; position: absolute; left: 0; top: 0; color: var(--agent);
+    font-family: var(--mono); font-weight: 700; }
+  ul.why li strong { color: var(--ink); }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <p class="eyebrow">Design brainstorm · v1</p>
+  <h1>Claude Code in the browser, one pod per user</h1>
+  <p class="lede">A three-tier design that moves the <em>display</em> to a browser and the
+  <em>execution</em> into an isolated Kubernetes pod — so the agentic loop, the tools, and the
+  MCP servers all run server-side, per user, on your local <code>kind</code> cluster.</p>
+
+  <div class="callout">
+    <span class="k">Decisions locked in this brainstorm</span>
+    Runtime = <strong>Claude Agent SDK (TypeScript)</strong> in the pod ·
+    Lifecycle = <strong>ephemeral pods</strong> (spawn on connect, delete on disconnect) ·
+    Identity = <strong>typed username</strong> (no auth) ·
+    MCP = <strong>add-a-server box + live status panel</strong> (a mini <code>/mcp</code>) ·
+    Transport = <strong>WebSocket</strong> ·
+    Pod creation = <strong>gateway calls the k8s API</strong> ·
+    Packaging = <strong>one shared <code>agent-core</code>, two shells</strong> (pod for browser + local Mac app) ·
+    Credentials = <strong>Claude subscription long-lived token</strong> (<code>claude setup-token</code>) → k8s Secret → <code>CLAUDE_CODE_OAUTH_TOKEN</code> in the pod.
+    <br><br>
+    <span class="pill set">RESOLVED</span> Auth uses your existing Claude subscription (verified: no
+    <code>ANTHROPIC_API_KEY</code>, OAuth login in Keychain). No API key needed — but
+    "SDK authenticates headless in a pod via the subscription token" is the <strong>first spike</strong>,
+    since it's the riskiest unknown.
+  </div>
+
+  <h2><span class="num">01</span>What runs where</h2>
+  <p>Three tiers. The browser is a <strong>dumb terminal</strong>; the gateway is a
+  <strong>router + pod spawner</strong>; each user's pod is where <strong>everything real
+  happens</strong>.</p>
+
+  <div class="tiers">
+    <div class="tier client">
+      <div class="where">User's Mac · browser</div>
+      <h4>Client (React)</h4>
+      <ul>
+        <li>Chat UI, message stream</li>
+        <li>"Add MCP" box + status panel</li>
+        <li>1 WebSocket to the gateway</li>
+        <li>No API key, no tools, no loop</li>
+      </ul>
+    </div>
+    <div class="tier k8s">
+      <div class="where">1 shared pod · k8s</div>
+      <h4>Gateway / control plane</h4>
+      <ul>
+        <li>Maps username → pod</li>
+        <li>Creates/deletes pods via k8s API</li>
+        <li>Proxies the WebSocket to the pod</li>
+        <li>Holds a scoped ServiceAccount</li>
+      </ul>
+    </div>
+    <div class="tier agent">
+      <div class="where">1 pod per user · k8s</div>
+      <h4>Agent pod</h4>
+      <ul>
+        <li>Runs the Agent SDK loop</li>
+        <li>Holds the model credentials</li>
+        <li>Runs tools (shell, files)</li>
+        <li>Connects to MCP servers</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="diagram">
+    <pre class="mermaid">
+%%{init: {'theme':'neutral', 'flowchart': {'curve':'basis'}}}%%
+flowchart TB
+    subgraph MAC["🖥️  User's Mac"]
+        B["Browser · React client<br/>chat UI · add-MCP box"]
+    end
+
+    subgraph CLUSTER["☸️  kind cluster"]
+        direction TB
+        GW["Gateway pod<br/>auth by username · router<br/>pod lifecycle via k8s API"]
+        API["Kubernetes API server"]
+        subgraph PODS["Per-user agent pods (ephemeral)"]
+            P1["Pod · user = charu<br/>Agent SDK loop<br/>tools + MCP clients"]
+            P2["Pod · user = alex<br/>Agent SDK loop<br/>tools + MCP clients"]
+        end
+        SEC["Secret: model credentials"]
+    end
+
+    ANTH["Anthropic API<br/>(model calls)"]
+    MCPR["Remote MCP server<br/>(optional, user-added URL)"]
+
+    B <-->|"WebSocket"| GW
+    GW -->|"create / delete pod"| API
+    API -.->|"schedules"| P1
+    API -.->|"schedules"| P2
+    GW <-->|"proxied WS"| P1
+    GW <-->|"proxied WS"| P2
+    SEC -.->|"mounted env"| P1
+    SEC -.->|"mounted env"| P2
+    P1 -->|"HTTPS"| ANTH
+    P1 -->|"MCP"| MCPR
+
+    classDef client fill:#fbeed6,stroke:#b26a00,color:#3a2a06;
+    classDef ctrl fill:#e6edfb,stroke:#2f5fd0,color:#12244f;
+    classDef agent fill:#dff2ef,stroke:#0f8a7a,color:#0a3b34;
+    classDef ext fill:#eef1f5,stroke:#8a94a6,color:#2a2f38;
+    class B client;
+    class GW,API,SEC ctrl;
+    class P1,P2 agent;
+    class ANTH,MCPR ext;
+    </pre>
+  </div>
+  <p class="cap">Fig. 1 — Topology. Two browser tabs with two names = two pods you can watch appear.</p>
+
+  <h2><span class="num">02</span>Why this shape</h2>
+  <p>The split isn't arbitrary — each boundary exists because something <em>can only live on one
+  side of it</em>. Read each row as "what forces this?"</p>
+
+  <h3>Why a <em>browser</em> for the UI (not a terminal, not a native app)</h3>
+  <ul class="why">
+    <li><strong>Reach without install.</strong> The whole premise is "Claude Code available from a
+    URL." A browser is the one client every user already has — no <code>brew install</code>, no
+    per-OS build. That's the entire reason to move off the terminal.</li>
+    <li><strong>The UI has no reason to be privileged.</strong> Rendering chat and streaming tokens
+    needs zero access to a filesystem, shell, or API key. So the client can safely be the
+    least-trusted, most-disposable tier — a thin view.</li>
+    <li><strong>It forces a clean network seam.</strong> Because a browser <em>can't</em> run tools,
+    you're pushed into a client/server split with one well-defined channel (the WebSocket). That seam
+    is exactly what lets the backend scale independently.</li>
+  </ul>
+
+  <h3>Why the loop runs in a <em>pod</em> (server-side), never in the browser</h3>
+  <ul class="why">
+    <li><strong>Secrets.</strong> The loop calls the Anthropic API, so it holds a credential. In a
+    browser that key ships to every user and leaks instantly. It must sit somewhere the user can't
+    read — a server process.</li>
+    <li><strong>Capability.</strong> "Claude Code" <em>is</em> running commands and editing files.
+    A browser tab has no shell and no filesystem; a pod does. The agent has to run where those exist.</li>
+    <li><strong>MCP.</strong> stdio MCP servers are local subprocesses. Only a real OS process (the
+    pod) can spawn and talk to them.</li>
+    <li><strong>Statefulness.</strong> An agentic session is long-lived, stateful, and messy
+    (working directory, open MCP connections, conversation memory). That belongs in a durable
+    server process, not a tab that can close mid-loop.</li>
+  </ul>
+
+  <h3>Why <em>one pod per user</em> (not one shared backend)</h3>
+  <ul class="why">
+    <li><strong>Isolation is the product.</strong> Each user gets a shell and filesystem. If two
+    users shared a process, user A's <code>rm -rf</code> or runaway MCP hits user B. A pod is a hard
+    blast-radius boundary — separate filesystem, separate process tree, separate memory.</li>
+    <li><strong>Resource fairness.</strong> One user's runaway loop can be capped with pod CPU/memory
+    limits without touching anyone else.</li>
+    <li><strong>Clean lifecycle.</strong> "Session over" becomes "delete the pod" — all state and
+    stray processes vanish at once. No cleanup logic to get wrong. This is exactly why ephemeral pods
+    are trivially correct.</li>
+    <li><strong>It's the mechanic you wanted to see.</strong> Per-user pods are the literal answer to
+    "how does this scale" — the unit of scaling <em>is</em> the user.</li>
+  </ul>
+
+  <h3>Why <em>Kubernetes</em> at all (not just Docker, not a VM)</h3>
+  <ul class="why">
+    <li><strong>On-demand scheduling is a solved problem.</strong> "Create an isolated environment on
+    demand, place it on a machine with room, tear it down after" is precisely what the k8s API +
+    scheduler do. Rebuilding that by hand over raw Docker is the hard part you'd otherwise write.</li>
+    <li><strong>One API, many machines.</strong> On <code>kind</code> it's one node; the <em>same</em>
+    <code>create Pod</code> call spreads across a real cluster later. The code doesn't change as you
+    scale — that's the "B: could be real" property.</li>
+    <li><strong>Batteries you'll want.</strong> Secrets, resource limits, namespaces, RBAC,
+    networking — already there, so the gateway stays small.</li>
+  </ul>
+
+  <h3>Why a separate <em>gateway</em> tier (why not let the browser talk to pods directly)</h3>
+  <ul class="why">
+    <li><strong>Browsers can't reach pods.</strong> Pod IPs are internal to the cluster and
+    ephemeral. Something inside the cluster must be the stable, public entry point.</li>
+    <li><strong>Someone must decide "which pod is yours" and create it.</strong> That's an
+    authority the client can't have. The gateway owns identity → pod mapping and holds the scoped
+    ServiceAccount that's allowed to create/delete pods.</li>
+    <li><strong>It keeps the k8s API private.</strong> Only the gateway talks to the control plane;
+    the client only ever sees one WebSocket. Smaller attack surface, cleaner boundary.</li>
+  </ul>
+
+  <div class="callout">
+    <span class="k">The one-line version</span>
+    <strong>UI in the browser</strong> because it needs no privilege and must be installable-free ·
+    <strong>loop in a pod</strong> because it holds secrets, needs a shell/filesystem, and is stateful ·
+    <strong>one pod per user</strong> because isolation is the whole product ·
+    <strong>Kubernetes</strong> because on-demand isolated environments is exactly its job ·
+    <strong>a gateway</strong> because someone trusted must route to and mint those pods.
+  </div>
+
+  <h2><span class="num">03</span>The flow of one session</h2>
+  <p>From typing your name to streaming tokens back — and where the time actually goes.</p>
+
+  <div class="diagram">
+    <pre class="mermaid">
+%%{init: {'theme':'neutral'}}%%
+sequenceDiagram
+    participant B as Browser
+    participant G as Gateway
+    participant K as k8s API
+    participant P as Agent pod
+    participant M as Anthropic API
+
+    B->>G: connect (username = charu)
+    G->>K: create Pod for charu
+    K-->>P: schedule + start (cold start ~seconds)
+    P-->>G: ready
+    G-->>B: session open
+
+    Note over B,M: user sends a prompt
+    B->>G: prompt (WebSocket)
+    G->>P: prompt (proxied WS)
+    loop agentic loop (in the pod)
+        P->>M: messages + tools
+        M-->>P: tool call / text (streamed)
+        P->>P: run tool (shell/file) or MCP call
+    end
+    P-->>G: stream tokens
+    G-->>B: stream tokens
+
+    Note over B,G: user closes tab
+    B->>G: disconnect
+    G->>K: delete Pod
+    </pre>
+  </div>
+  <p class="cap">Fig. 2 — Lifecycle + message flow for one ephemeral session.</p>
+
+  <div class="callout agent">
+    <span class="k">The latency insight you set out to measure</span>
+    The browser↔gateway↔pod hops are <strong>in-cluster and local</strong> — microseconds to low
+    single-digit ms on <code>kind</code>. The cost you actually feel is (1) <strong>pod cold-start</strong>,
+    paid once per session because pods are ephemeral, and (2) the <strong>pod→Anthropic model call</strong>,
+    which is <em>identical</em> to what the terminal Claude Code pays today. Conclusion the demo will prove:
+    moving the UI to a browser adds almost no latency; the interesting number is cold-start, and that's the
+    thing pre-warming (a future experiment) would attack.
+  </div>
+
+  <h2><span class="num">04</span>The mini <code>/mcp</code></h2>
+  <p>Reproducing Claude Code's <code>/mcp</code> is three messages on the same WebSocket. The panel
+  in the browser <em>is</em> your <code>/mcp</code>; the pod does the real connecting.</p>
+
+  <table>
+    <thead><tr><th>Claude Code <code>/mcp</code></th><th>Our equivalent</th><th>Where it runs</th></tr></thead>
+    <tbody>
+      <tr><td>See <code>connected / not connected</code></td><td><code>list</code> msg → per-server state + tool count</td><td>Pod reports, browser renders</td></tr>
+      <tr><td>Add a server</td><td>add-MCP box → pod re-inits session with new <code>mcpServers</code></td><td>Pod (Agent SDK)</td></tr>
+      <tr><td><code>reconnect</code> / <code>disable</code></td><td>control msg → re-init or drop that server</td><td>Pod</td></tr>
+    </tbody>
+  </table>
+  <p>Since pods are ephemeral, the MCP config lives in the session's memory — no config files. We'll
+  bake one known-good stdio MCP into the pod image and allow remote-URL MCPs via the box, covering both
+  transports without turning the pod into a package manager.</p>
+
+  <h2><span class="num">05</span>Design refinement — one loop, two shells</h2>
+  <p>Now that you want this loop to run <strong>both in a pod (browser-driven) and as an app on your
+  Mac</strong>, copy Anthropic's actual move: don't build two agents — build <strong>one core and wrap
+  it in two thin shells</strong>. The core is identical; only the packaging differs.</p>
+
+  <div class="tiers">
+    <div class="tier agent" style="grid-column:1/-1">
+      <div class="where">shared package · <code>agent-core</code></div>
+      <h4>The loop (write once)</h4>
+      <ul>
+        <li>Wraps the Claude Agent SDK: the agentic loop, tool execution, MCP client management</li>
+        <li>Exposes a clean interface: <code>startSession()</code>, <code>sendPrompt()</code>,
+        <code>onEvent()</code> (token / tool-call / mcp-status streams), <code>addMcpServer()</code></li>
+        <li>Knows nothing about WebSockets, HTTP, browsers, or k8s — pure engine</li>
+      </ul>
+    </div>
+    <div class="tier k8s">
+      <div class="where">Shell A · runs in the pod</div>
+      <h4>Server shell (browser)</h4>
+      <ul>
+        <li>Wraps <code>agent-core</code> in a WebSocket server</li>
+        <li>Bridges browser events ↔ core events</li>
+        <li>This is the pod image from §01</li>
+      </ul>
+    </div>
+    <div class="tier client">
+      <div class="where">Shell B · runs on your Mac</div>
+      <h4>Local shell (app)</h4>
+      <ul>
+        <li>Wraps the <em>same</em> <code>agent-core</code></li>
+        <li>Drives it from a local UI (terminal, or a local web/Electron window)</li>
+        <li>Uses your real filesystem — no pod</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="diagram">
+    <pre class="mermaid">
+%%{init: {'theme':'neutral', 'flowchart': {'curve':'basis'}}}%%
+flowchart TB
+    subgraph CORE["📦  agent-core (shared package — the loop)"]
+        L["Agent SDK loop · tools · MCP clients<br/>startSession · sendPrompt · onEvent"]
+    end
+
+    subgraph A["Shell A — Server (in k8s pod)"]
+        WS["WebSocket server"]
+    end
+    subgraph B["Shell B — Local (on your Mac)"]
+        LR["Local runner + UI"]
+    end
+
+    BR["Browser client"] <-->|"WebSocket"| WS
+    WS --> L
+    DESK["Local window / terminal"] --> LR
+    LR --> L
+    L -->|"HTTPS"| ANTH["Anthropic API (model)"]
+
+    classDef core fill:#dff2ef,stroke:#0f8a7a,color:#0a3b34;
+    classDef ctrl fill:#e6edfb,stroke:#2f5fd0,color:#12244f;
+    classDef client fill:#fbeed6,stroke:#b26a00,color:#3a2a06;
+    classDef ext fill:#eef1f5,stroke:#8a94a6,color:#2a2f38;
+    class L core;
+    class WS ctrl;
+    class LR,DESK,BR client;
+    class ANTH ext;
+    </pre>
+  </div>
+  <p class="cap">Fig. 4 — Same core, two shells. Adding the Mac app becomes "write a second thin wrapper," not a second agent.</p>
+
+  <div class="callout agent">
+    <span class="k">Why this is the right factoring</span>
+    It's exactly how Anthropic ships it (SDK harness → terminal shell + cloud-sandbox shell), it means
+    the interesting logic is tested once, and your browser-vs-Mac latency comparison becomes
+    apples-to-apples because <em>the same code</em> runs on both sides — the only variable is
+    pod hop + cold-start.
+  </div>
+
+  <div class="appendix">
+    <h2>Appendix — What Claude Code actually does</h2>
+
+    <h3>Verified: the same harness powers both surfaces</h3>
+    <p>Confirmed from Anthropic's public docs (not leaked source): the <strong>Claude Agent SDK is the
+    same agent loop that powers Claude Code</strong>, exposed as a library — it was renamed from "Claude
+    Code SDK" to "Claude Agent SDK" (~March 2026) for exactly that reason. <strong>Terminal Claude
+    Code</strong> runs that harness locally on your machine; <strong>Claude Code on the web</strong>
+    runs each session in an <strong>isolated cloud sandbox</strong> (filesystem + network isolation,
+    with sensitive credentials kept <em>outside</em> the sandbox). The model always runs on Anthropic's
+    servers.</p>
+
+    <div class="diagram">
+      <pre class="mermaid">
+%%{init: {'theme':'neutral', 'flowchart': {'curve':'basis'}}}%%
+flowchart TB
+    HARNESS["🧠  Claude Agent SDK<br/>(the shared harness / agent loop)"]
+
+    subgraph LOCAL["On your Mac"]
+        TCLI["Terminal Claude Code<br/>harness runs locally"]
+    end
+    subgraph CLOUD["Anthropic cloud"]
+        SANDBOX["Claude Code on the web<br/>harness runs in isolated sandbox"]
+        MODEL["Model inference"]
+        CREDS["Credentials kept<br/>OUTSIDE the sandbox"]
+    end
+    WEBB["Browser · claude.com/code"]
+
+    TCLI -->|"is built on"| HARNESS
+    SANDBOX -->|"is built on"| HARNESS
+    WEBB <-->|"drives"| SANDBOX
+    HARNESS -->|"API calls"| MODEL
+    CREDS -.->|"proxied, not mounted"| SANDBOX
+
+    classDef core fill:#dff2ef,stroke:#0f8a7a,color:#0a3b34;
+    classDef local fill:#fbeed6,stroke:#b26a00,color:#3a2a06;
+    classDef cloud fill:#e6edfb,stroke:#2f5fd0,color:#12244f;
+    class HARNESS core;
+    class TCLI,WEBB local;
+    class SANDBOX,MODEL,CREDS cloud;
+      </pre>
+    </div>
+    <p class="cap">Fig. 5 — Anthropic's real shape (from public docs). Your project mirrors the right
+    half; your Mac app mirrors the left half.</p>
+
+    <div class="callout">
+      <span class="k">Security note worth stealing later</span>
+      Anthropic keeps credentials <em>outside</em> the sandbox and proxies model calls, so a
+      compromised session never sees the key. Our demo mounts the key as a Secret for simplicity —
+      fine for <code>kind</code>, but the "credential proxy at the gateway" upgrade is the honest path
+      to production, and a great future chapter.
+    </div>
+
+    <h3 style="margin-top:2rem">What the loop itself does</h3>
+    <p>So the mapping above is grounded, here's the real thing we're mirroring. Claude Code (and the
+    Agent SDK underneath it) is fundamentally a <strong>loop</strong> around the model that can call
+    tools and MCP servers.</p>
+
+    <div class="diagram">
+      <pre class="mermaid">
+%%{init: {'theme':'neutral', 'flowchart': {'curve':'basis'}}}%%
+flowchart TB
+    START(["User prompt"]) --> CTX["Assemble context<br/>system prompt · history · tool defs · MCP tools"]
+    CTX --> CALL["Call model<br/>(Messages API, streamed)"]
+    CALL --> DEC{"Model output?"}
+    DEC -->|"text only"| DONE(["Stream answer, stop"])
+    DEC -->|"tool_use"| TOOL["Execute tool"]
+    TOOL --> KIND{"Which tool?"}
+    KIND -->|"built-in"| BI["Bash · Read · Write · Edit"]
+    KIND -->|"mcp__server__tool"| MCPX["Forward to MCP server<br/>over stdio / http"]
+    BI --> RES["tool_result"]
+    MCPX --> RES
+    RES --> CALL
+
+    classDef n fill:#e6edfb,stroke:#2f5fd0,color:#12244f;
+    classDef a fill:#dff2ef,stroke:#0f8a7a,color:#0a3b34;
+    classDef t fill:#fbeed6,stroke:#b26a00,color:#3a2a06;
+    class CTX,CALL n;
+    class TOOL,BI,MCPX,RES a;
+    class DEC,KIND t;
+      </pre>
+    </div>
+    <p class="cap">Fig. 3 — The agentic loop. "MCP support" = extra tool definitions injected at
+    the top, whose calls get forwarded to a server instead of run locally.</p>
+
+    <h3>MCP connection, concretely</h3>
+    <p>On startup Claude Code reads each server from config (a <code>stdio</code> command it spawns, or
+    an <code>http</code>/<code>sse</code> URL it opens), runs the MCP <code>initialize</code> handshake,
+    and <strong>discovers that server's tools</strong>. Those tools are exposed to the model namespaced
+    as <code>mcp__&lt;server&gt;__&lt;tool&gt;</code>. <code>/mcp</code> is just the surface that shows
+    each server's connection state and lets you reconnect / enable / disable. In our system the Agent
+    SDK does the connect + discovery; we drive it with the three messages in section 03.</p>
+
+    <p class="footnote">Exact Agent SDK option names (e.g. how <code>mcpServers</code> is passed) will
+    be confirmed against the installed SDK when we write the spec — not quoted from memory here.</p>
+  </div>
+
+  <p class="footnote">Next step after you're happy with this: write the spec, then an implementation plan.</p>
+</div>
+
+<script type="module">
+  // Standalone renderer for local viewing (VS Code Simple Browser, any browser).
+  // Loads mermaid from CDN; falls back to a readable notice if offline.
+  try {
+    const mermaid = (await import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs')).default;
+    mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
+    await mermaid.run({ querySelector: 'pre.mermaid' });
+  } catch (e) {
+    document.querySelectorAll('pre.mermaid').forEach((el) => {
+      const note = document.createElement('div');
+      note.style.cssText = 'font:13px ui-monospace,monospace;color:#b26a00;padding:.6rem;border:1px dashed #b26a00;border-radius:8px;margin-bottom:.6rem;';
+      note.textContent = 'Diagram needs internet to render (mermaid CDN). The diagram source is shown below.';
+      el.parentNode.insertBefore(note, el);
+    });
+    console.error('mermaid load failed:', e);
+  }
+</script>
+</body>
+</html>
