@@ -55,7 +55,10 @@ export function createSession(
   })();
 
   return {
-    sendPrompt(text: string) { input.push(userMessage(text)); },
+    sendPrompt(text: string) {
+      if (disposed) return;
+      input.push(userMessage(text));
+    },
     async setMcpServers(servers) { await q.setMcpServers(servers); },
     async dispose() {
       if (disposed) return;
