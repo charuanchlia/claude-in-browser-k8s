@@ -223,8 +223,10 @@ would attack. When Shell B (Mac app) exists, rerun (3) locally to confirm it's a
 
 ## 10. Build order (Option A) — informs the implementation plan
 
-1. **Spike: headless subscription auth in a pod.** Prove `agent-core` can call the model from inside a
-   Linux container using `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`. *Riskiest unknown — do first.*
+1. **Spike: headless subscription auth in a pod. ✅ DONE (2026-07-18).** Verified `claude -p` runs
+   headless in a clean `node:24-slim` container with only `CLAUDE_CODE_OAUTH_TOKEN` (from
+   `claude setup-token`) — no Keychain, no API key. Returned `CONTAINER_AUTH_OK`. The credential path
+   in §7 is validated.
 2. `agent-core` package + tests (loop, events, MCP).
 3. Shell A (pod server) + pod image + `kind load`.
 4. Gateway (pod lifecycle + WS proxy + RBAC).
@@ -238,7 +240,8 @@ credential proxy.
 
 ## 11. Open assumptions
 
-- The subscription long-lived token works headless in a Linux pod via `CLAUDE_CODE_OAUTH_TOKEN`
-  (Task 1 validates; fallback is a pay-as-you-go API key if it doesn't).
+- ~~The subscription long-lived token works headless in a Linux pod via `CLAUDE_CODE_OAUTH_TOKEN`~~
+  **Validated 2026-07-18** (see §10 Task 1). Token is long-lived, so we regenerate via
+  `claude setup-token` if/when it expires.
 - Exact Agent SDK method/option names (esp. how `mcpServers` is passed and how streaming events are
   surfaced) are confirmed against the installed SDK during Task 2, not quoted from memory here.
