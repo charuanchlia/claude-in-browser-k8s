@@ -25,6 +25,72 @@ The dependency order is deliberate: we build **inside-out** — the transport-ag
 (`gateway`), then the UI, then the cluster that runs it all. Each task produces something you can run
 and verify on its own, so a failure is always localized to the task you just did.
 
+**How this differs from the architecture doc:** [docs/architecture.html](../../architecture.html) shows
+the *runtime* picture — which process talks to which over the network, once everything is deployed. The
+diagram below shows the *build-time* picture instead — which package imports which, and therefore which
+order we have to build them in. Same system, orthogonal view: the runtime arrows are network calls made
+at 2am by a live pod; the arrows below are `import` statements resolved once, when you run `npm install`.
+
+```mermaid
+%%{init: {'theme':'neutral', 'flowchart': {'curve':'basis'}}}%%
+flowchart BT
+    subgraph T0["Task 0 — foundation"]
+        WS["npm workspaces + TS + Vitest\n(no product code)"]
+    end
+
+    subgraph T1["Task 1"]
+        PROTO["📦 protocol\ntypes only, zero deps\nClientMessage / ServerMessage"]
+    end
+
+    subgraph T2["Task 2 — the engine (innermost)"]
+        CORE["📦 agent-core\nwraps Claude Agent SDK\npushable · translate · session\ntransport-agnostic"]
+    end
+
+    subgraph T3["Task 3 — Shell A"]
+        POD["🖥 pod-server\nWebSocket server\n1 process = 1 user session\n+ Dockerfile"]
+    end
+
+    subgraph T4["Task 4 — spawner"]
+        GW["🖥 gateway\npodName · podManager · proxy\ncreates/deletes pods via k8s API"]
+    end
+
+    subgraph T5["Task 5 — UI"]
+        WEB["🌐 web-client\nReact chat + mini-/mcp panel\nno privileged deps"]
+    end
+
+    subgraph T6["Task 6 — cluster"]
+        K8S["☸ k8s manifests + scripts\nnamespace · RBAC · Secret\nDeployment/Service"]
+    end
+
+    WS --> PROTO
+    WS --> CORE
+    PROTO --> POD
+    CORE --> POD
+    PROTO --> GW
+    PROTO --> WEB
+    POD -.->|"built into image,\nspawned at runtime"| GW
+    GW --> K8S
+    WEB -.->|"dist/ copied into\ngateway's image"| GW
+
+    classDef core fill:#dff2ef,stroke:#0f8a7a,color:#0a3b34;
+    classDef shell fill:#e6edfb,stroke:#2f5fd0,color:#12244f;
+    classDef ui fill:#fbeed6,stroke:#b26a00,color:#3a2a06;
+    classDef base fill:#eef1f5,stroke:#8a94a6,color:#2a2f38;
+    class WS,PROTO base;
+    class CORE core;
+    class POD,GW shell;
+    class WEB,K8S ui;
+```
+
+Read the arrows as "depends on" pointing upward: `agent-core` depends on nothing we wrote (only the SDK),
+so it's built first and is the most reusable — it's also the piece that would get reused unchanged by a
+future Mac-app shell. `pod-server` depends on `agent-core` + `protocol`. `gateway` doesn't import
+`agent-core` at all (it never runs the loop — it only spawns pods that do), which is exactly the
+separation of concerns from spec §3.3. `web-client` depends on nothing but `protocol`, keeping it
+provably unprivileged. The dotted arrows aren't imports — they're the two places a *build artifact*
+(a Docker image, a `dist/` folder) crosses from one task into another, which is why Task 6's scripts
+build `pod-server` and `gateway` images in a specific order (`build-and-load.sh`).
+
 ---
 
 ## File Structure
