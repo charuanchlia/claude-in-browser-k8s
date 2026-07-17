@@ -1,3 +1,5 @@
 .secrets/
 node_modules/
 .worktrees/
+dist/
+*.tsbuildinfo
