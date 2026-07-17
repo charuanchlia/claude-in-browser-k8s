@@ -19,4 +19,10 @@ describe("createPushable", () => {
     await consumer;
     expect(got).toEqual(["a", "b"]);
   });
+
+  it("throws if push is called after end", () => {
+    const p = createPushable<number>();
+    p.end();
+    expect(() => p.push(1)).toThrow("push after end");
+  });
 });

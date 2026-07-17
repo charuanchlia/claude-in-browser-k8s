@@ -24,7 +24,11 @@ export function createPushable<T>(): Pushable<T> {
   const iterator = gen();
   return {
     [Symbol.asyncIterator]: () => iterator,
-    push(item: T) { queue.push(item); wake?.(); },
+    push(item: T) {
+      if (ended) throw new Error("push after end");
+      queue.push(item);
+      wake?.();
+    },
     end() { ended = true; wake?.(); },
   };
 }

@@ -27,6 +27,7 @@ export function createSession(
   opts: SessionOptions = {},
 ): Session {
   const input: Pushable<SDKUserMessage> = createPushable<SDKUserMessage>();
+  let disposed = false;
 
   const q: Query = query({
     prompt: input,
@@ -56,6 +57,11 @@ export function createSession(
   return {
     sendPrompt(text: string) { input.push(userMessage(text)); },
     async setMcpServers(servers) { await q.setMcpServers(servers); },
-    async dispose() { input.end(); await q.interrupt().catch(() => {}); },
+    async dispose() {
+      if (disposed) return;
+      disposed = true;
+      input.end();
+      await q.interrupt().catch(() => {});
+    },
   };
 }
