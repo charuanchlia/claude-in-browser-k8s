@@ -12,6 +12,21 @@
 
 ---
 
+## How to read this plan
+
+Each task opens with a **Context** block — what this piece is, *why* it exists, and how it connects to
+the tiers in the architecture diagram ([docs/architecture.html](../../architecture.html)). Then come
+bite-sized steps; non-obvious steps carry a `*Why:*` line so you never execute a command without
+knowing what it's proving. If you only skim the Context blocks top to bottom, you should understand the
+whole system before writing a line of code.
+
+The dependency order is deliberate: we build **inside-out** — the transport-agnostic engine first
+(`agent-core`), then the shell that exposes it (`pod-server`), then the thing that spawns that shell
+(`gateway`), then the UI, then the cluster that runs it all. Each task produces something you can run
+and verify on its own, so a failure is always localized to the task you just did.
+
+---
+
 ## File Structure
 
 ```
@@ -67,6 +82,14 @@ agenticharness/
 ---
 
 ## Task 0: Repo scaffolding
+
+**Context:** Everything we build is TypeScript that runs on Node, and the project has several pieces
+(`agent-core`, `pod-server`, `gateway`, `web-client`) that depend on each other. **npm workspaces** lets
+those pieces live in one repo and reference each other by name (e.g. `pod-server` imports
+`@claude-lab/agent-core`) without publishing to a registry — a change in the engine is instantly visible
+to the shell that uses it. We also set up **Vitest** now because the plan is test-driven: for the pieces
+with real logic, we write the test before the code. Nothing here is product code; it's the foundation so
+every later task has a place to live and a way to be tested.
 
 **Files:**
 - Create: `package.json`, `tsconfig.base.json`, `vitest.config.ts`
@@ -138,6 +161,15 @@ git commit -m "chore: scaffold npm workspaces + TS + vitest"
 
 ## Task 1: `protocol` package (shared WS message types)
 
+**Context:** Three separate programs talk over one WebSocket: the browser, the gateway, and the pod. If
+each defined its own idea of "what a message looks like," they'd drift apart and break in ways the
+compiler couldn't catch. So we define the message shapes **once**, in a tiny types-only package that all
+three import. This is the contract for the whole system — `ClientMessage` is everything the browser can
+say (join, send a prompt, add an MCP server), `ServerMessage` is everything the pod can say back (status,
+assistant text, tool calls, MCP status, results with latency numbers, errors). It has zero runtime code
+and zero dependencies on purpose: the browser must be able to import it without dragging in the Agent SDK
+or Node libraries. Read this file and you know the entire browser↔pod conversation.
+
 **Files:**
 - Create: `packages/protocol/package.json`, `packages/protocol/src/index.ts`
 
@@ -199,7 +231,21 @@ git commit -m "feat(protocol): shared websocket message types"
 
 ## Task 2: `agent-core` (the loop)
 
-The engine. Knows nothing about WebSockets/HTTP/k8s. Two pure helpers get real unit tests; the session integration is smoke-tested against the live model (gated on the token).
+**Context:** This is the heart of the whole project and the reason it exists — the *agentic loop*. It
+wraps the **Claude Agent SDK**, which (as we verified) is the same harness that powers Claude Code
+itself. The SDK's `query()` gives us the loop, tool execution (Bash/Read/Write), and MCP support for
+free; our job is to wrap it behind a clean, transport-agnostic interface (`createSession`, `sendPrompt`,
+`setMcpServers`, an event callback). "Transport-agnostic" is the key design choice from spec §5: this
+package knows nothing about WebSockets, HTTP, browsers, or Kubernetes — which is exactly what lets the
+*same* engine later power both the pod (Shell A) and a local Mac app (Shell B) without a rewrite. It's
+the "one loop" in "one loop, two shells."
+
+We split it into three files so each has one job and the tricky parts are unit-testable without touching
+the network: `pushable.ts` (an async queue that lets us feed prompts into a long-lived `query()` over
+time — the SDK's streaming-input mode needs an async iterable), `translate.ts` (a *pure function* that
+converts the SDK's ~40 message types into our handful of `CoreEvent`s — pure means we can test it with
+plain objects, no live model), and `session.ts` (the thin wiring that runs the loop and connects the
+two). The two pure files get real TDD; the live wiring gets a smoke test that actually calls the model.
 
 **Files:**
 - Create: `packages/agent-core/package.json`, `src/pushable.ts`, `src/translate.ts`, `src/session.ts`, `src/index.ts`
@@ -223,6 +269,13 @@ Create `packages/agent-core/package.json`:
 Run: `npm install` (hoists the SDK into the workspace).
 
 - [ ] **Step 2: Write the failing test for the pushable input queue**
+
+*Why:* A Claude Code session is long-lived — the user sends prompt after prompt into the *same* running
+loop. The SDK models this as "streaming input": `query()` accepts an async iterable that yields user
+messages over time. But a chat UI doesn't have all the prompts up front; they arrive as the user types.
+A "pushable" bridges that gap — an async iterable you can `push()` into later. The hard part is the
+timing (a consumer that's already waiting when nothing is queued must wake up the instant you push), so
+we test both orderings: items pushed *before* iteration and items pushed *while the consumer is blocked*.
 
 Create `packages/agent-core/test/pushable.test.ts`:
 ```ts
@@ -297,6 +350,13 @@ Run: `npx vitest run packages/agent-core/test/pushable.test.ts`
 Expected: PASS (2 tests).
 
 - [ ] **Step 6: Write the failing test for the message translator**
+
+*Why:* The SDK emits a firehose of ~40 message types (thinking, hooks, task notifications, retries, and
+much more). The browser only cares about a few things: assistant text, tool calls, MCP status, the final
+result, and errors. `translate` is the filter/adapter between those two worlds. Keeping it a **pure
+function** (SDK message in → array of our events out, no side effects) is what makes it testable with
+hand-written objects — we can assert the exact mapping without a network, an API key, or a running model.
+It also isolates our system from SDK churn: when the SDK adds message types, only this one file changes.
 
 Create `packages/agent-core/test/translate.test.ts`:
 ```ts
@@ -407,8 +467,17 @@ Expected: PASS (6 tests).
 
 - [ ] **Step 10: Implement the session runner**
 
-Create `packages/agent-core/src/session.ts`. This wires the pushable input into `query()` and
-streams translated events to a callback. Constructs `SDKUserMessage` objects for streaming input —
+*Why:* This is where the pushable and the translator come together into a live loop. Three choices worth
+understanding: (1) We pass the pushable as `prompt`, which puts `query()` in streaming-input mode — the
+only mode where control methods like `setMcpServers()` work, which we need for the "add an MCP" feature.
+(2) We drain the query in a **background async loop** (the self-invoking `async () => {…}`) because the
+loop runs for the whole session; we can't `await` it inline or `sendPrompt` would block forever. Events
+flow out through the `onEvent` callback instead. (3) We set `permissionMode: "bypassPermissions"` because
+**the pod itself is the sandbox** — there's no human at a terminal to approve each tool call, and the
+isolation that would normally make that dangerous is provided by the pod boundary (spec §7). `cwd` is
+`/workspace`, the scratch dir we create in the pod image.
+
+Create `packages/agent-core/src/session.ts`. Constructs `SDKUserMessage` objects for streaming input —
 verify the minimal required fields against `SDKUserMessage` in `sdk.d.ts` if the SDK rejects them.
 ```ts
 import { query, type Query, type SDKUserMessage, type McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
@@ -504,8 +573,15 @@ git commit -m "feat(agent-core): SDK-backed session with pushable input and even
 
 ## Task 3: `pod-server` (Shell A)
 
-A WebSocket server that owns exactly one `agent-core` session (one pod = one user). Translates
-`ClientMessage` in / `ServerMessage` out.
+**Context:** `agent-core` is a library — it can't be reached over the network by itself. Shell A is the
+thin server that *exposes* it: it opens a WebSocket, and for that connection it creates exactly one
+`agent-core` session. This is where the "one pod = one user" model becomes concrete — the whole process
+serves a single person's session, so there's no multi-tenant routing, no locking, no cross-user state to
+get wrong. Its only real work is translation: JSON `ClientMessage`s coming in become `agent-core` calls
+(`sendPrompt`, `setMcpServers`), and `CoreEvent`s coming out become JSON `ServerMessage`s. It also bakes
+in one default MCP server (the filesystem MCP pointed at `/workspace`) so MCP works the moment the pod
+starts, and it handles `ping`/`pong` so we can later measure the in-cluster network hop. This is the code
+that will run *inside the per-user pod* — the green "Agent pod" box in the diagram.
 
 **Files:**
 - Create: `apps/pod-server/package.json`, `apps/pod-server/src/index.ts`, `apps/pod-server/Dockerfile`
@@ -597,6 +673,13 @@ Expected: prints `pod-server listening on :8080`. Stop with Ctrl-C.
 
 - [ ] **Step 4: Dockerfile**
 
+*Why:* This is the image every per-user pod runs. The build context is the **repo root** (not the app
+dir) because the app imports sibling workspace packages (`agent-core`, `protocol`) — Docker needs to see
+them to install and resolve. We install `ca-certificates` so the container can make HTTPS calls to the
+Anthropic API. We `mkdir /workspace` because that's the `cwd` the agent works in and where the filesystem
+MCP is rooted. Notice there's **no token in the image** — it's injected at runtime as an env var from the
+k8s Secret (spec §7), so the same image is safe to share and rebuild.
+
 Create `apps/pod-server/Dockerfile` (build context is the repo root):
 ```dockerfile
 FROM node:24-slim
@@ -645,9 +728,19 @@ git commit -m "feat(pod-server): websocket shell around agent-core + Dockerfile"
 
 ## Task 4: `gateway` (control plane)
 
-Serves the client, accepts a browser WS, creates the user's pod, waits for Ready, proxies the WS,
-and deletes the pod on disconnect. `podName` is pure and unit-tested; the k8s lifecycle is verified
-against the live cluster in Task 6/7.
+**Context:** This is the tier that makes "one pod per user, on demand" actually happen — the orchestration
+mechanic you set out to understand. A browser can't reach a pod directly (pod IPs are internal and
+ephemeral) and can't be trusted to create pods, so a trusted in-cluster component must sit in the middle.
+The gateway does four things, each mapping to a design decision: (1) **identity** — reads the typed
+username and derives a deterministic pod name, so the same user always maps to the same pod; (2)
+**lifecycle** — calls the Kubernetes API to create the pod and waits until it's Running with an IP (this
+is the pod cold-start you'll measure), and deletes it on disconnect (ephemeral, spec §3.1); (3) **proxy**
+— once the pod is up, it pipes the browser's WebSocket straight through to the pod's WebSocket, so from
+then on the gateway is just a pass-through; (4) **serving the UI** — it also hands the browser the static
+React files. It runs with a **least-privilege ServiceAccount** that can only touch pods in one namespace
+(spec §7) — so even if the gateway were compromised, the blast radius is bounded. We split out `podName`
+(pure, unit-tested — it must produce DNS-safe names or the k8s API rejects them) from `podManager` (the
+live k8s calls) and `proxy` (the pipe) so each is small and independently understandable.
 
 **Files:**
 - Create: `apps/gateway/package.json`, `src/podName.ts`, `src/podManager.ts`, `src/proxy.ts`, `src/index.ts`, `Dockerfile`
@@ -673,6 +766,13 @@ Create `apps/gateway/package.json`:
 Run: `npm install`.
 
 - [ ] **Step 2: Write the failing test for podName**
+
+*Why:* Kubernetes object names must be DNS-1123 labels: lowercase, alphanumeric-plus-hyphen, ≤63 chars,
+no leading/trailing hyphen. A username like `"Charu Anchlia!"` would be rejected by the k8s API and the
+pod would never get created. This function is the sanitizer, and it must be **deterministic** (same
+username → same name) because that's how a reconnect finds the user's existing pod instead of orphaning
+it. It's pure string logic, so it's the perfect thing to lock down with tests before anything touches a
+cluster — a bug here would otherwise surface as a confusing k8s API error much later.
 
 Create `apps/gateway/test/podName.test.ts`:
 ```ts
@@ -719,6 +819,18 @@ Run: `npx vitest run apps/gateway/test/podName.test.ts`
 Expected: PASS (4 tests).
 
 - [ ] **Step 6: Implement the pod manager**
+
+*Why:* This file is the actual "spawn a container per user" magic, expressed as k8s API calls.
+`loadFromCluster()` reads the ServiceAccount token that k8s mounts into the gateway pod — that's how the
+gateway authenticates to the API without any hard-coded credentials. `ensurePod` is written to be
+**idempotent** (it swallows the `AlreadyExists`/409 error) so a reconnecting user reuses their pod rather
+than crashing. It then **polls** until the pod is `Running` with an IP, because pod creation is async —
+the API returns immediately but the container takes seconds to schedule and start (this poll *is* the
+cold-start you'll measure). We inject the token via `secretKeyRef` (never in the image) and set CPU/memory
+**limits** so one user's runaway loop can't starve the node (spec §7). `imagePullPolicy: IfNotPresent`
+matters specifically for `kind`: our image is side-loaded with `kind load`, not pushed to a registry, so
+we must tell k8s *not* to try pulling it from the internet. `sweepStalePods` is a safety net: if the
+gateway restarted while pods were live, those pods are now orphaned, so we delete them on startup.
 
 Create `apps/gateway/src/podManager.ts`:
 ```ts
@@ -787,6 +899,14 @@ Note: `@kubernetes/client-node` v0.22 uses single-object-argument methods (`crea
 
 - [ ] **Step 7: Implement the WS proxy**
 
+*Why:* Once the pod is up, the gateway's job is nearly done — it becomes a dumb pipe. This function opens
+a second WebSocket *to the pod* and forwards raw bytes in both directions, so prompts flow browser→pod and
+streamed events flow pod→browser with the gateway adding essentially zero latency (the point from spec §9:
+the in-cluster hop is negligible). It forwards messages verbatim (`d.toString()`) rather than
+parsing/re-serializing — no reason to deserialize what we're just relaying, and it keeps the gateway
+agnostic to protocol changes. Crucially, `browser.on("close")` closes the pod socket **and** calls
+`onClose`, which is where the gateway deletes the pod — this is what makes the pod truly ephemeral.
+
 Create `apps/gateway/src/proxy.ts`:
 ```ts
 import { WebSocket } from "ws";
@@ -808,6 +928,15 @@ export function proxy(browser: WebSocket, podUrl: string, onClose: () => void): 
 ```
 
 - [ ] **Step 8: Implement the gateway entrypoint**
+
+*Why:* This ties the three helpers together into the request flow from spec §5. The HTTP server serves the
+built React app (with an SPA fallback to `index.html` so client routing works). The WebSocket server
+listens on `/ws`; the first message *must* be `hello{username}` — that's our (deliberately minimal)
+"auth". On hello it derives the pod name, tells the browser we're `starting` (so the UI can show
+"spinning up your environment" during cold-start), creates+waits for the pod, logs the cold-start time
+(latency measurement), and hands off to `proxy`. Every failure path (`ensurePod` throws, bad hello) sends
+a clear `session.status: error` and cleans up the pod — no silent hangs, no orphans. `sweepStalePods` runs
+once at boot as the orphan safety net described above.
 
 Create `apps/gateway/src/index.ts`:
 ```ts
@@ -867,6 +996,11 @@ server.listen(PORT, () => console.log(`gateway listening on :${PORT}`));
 
 - [ ] **Step 9: Dockerfile**
 
+*Why:* The gateway image bundles both the server code *and* the built React client, because the gateway
+serves the UI itself (one thing to deploy, no separate web server). That's why it copies `web-client/dist`
+— the pre-built static files from Task 5. The build order in `build-and-load.sh` matters for this reason:
+`vite build` must run *before* `docker build` so `dist/` exists to copy.
+
 Create `apps/gateway/Dockerfile` (context = repo root; expects `web-client/dist` to be built by Task 5 and copied in):
 ```dockerfile
 FROM node:24-slim
@@ -892,7 +1026,15 @@ git commit -m "feat(gateway): pod lifecycle + ws proxy + static client server"
 
 ## Task 5: `web-client` (React UI)
 
-Thin chat UI + mini-`/mcp` panel. One WebSocket to `/ws`.
+**Context:** This is the "dumb terminal" tier from the diagram — deliberately the least-privileged, least
+-clever part. It has no API key, runs no tools, holds no loop; it captures text, opens one WebSocket, and
+renders whatever streams back. That's the whole point of the architecture: moving the *display* to the
+browser while the *execution* stays in the pod. The mini-`/mcp` panel is the concrete version of your "UI
+that lets users add MCPs" — it lists servers with their connection status (fed by the pod's `mcp.status`
+messages, exactly mirroring what `/mcp` shows in the terminal) and has a form to add a remote one. We use
+Vite because it gives us a fast dev server that can proxy `/ws` to the gateway during development, and a
+`build` that emits static files the gateway serves in production. Keeping this tier thin is what makes the
+latency story honest — the browser adds one round-trip and nothing else.
 
 **Files:**
 - Create: `apps/web-client/package.json`, `vite.config.ts`, `index.html`, `src/main.tsx`, `src/App.tsx`, `src/ws.ts`, `src/McpPanel.tsx`, `src/styles.css`
@@ -1083,6 +1225,17 @@ git commit -m "feat(web-client): React chat UI + mini-/mcp panel"
 
 ## Task 6: Kubernetes manifests + scripts
 
+**Context:** So far everything can run on a laptop; this task is what makes it *Kubernetes*. The manifests
+declare the cluster-side world: a **namespace** to contain everything, an **RBAC** trio (ServiceAccount +
+Role + RoleBinding) that grants the gateway exactly the pod permissions it needs and nothing else, a
+**Secret** holding your subscription token, and a **Deployment + NodePort Service** that runs the gateway
+and exposes it at `localhost:30080`. The `kind-config.yaml` maps that NodePort out to your Mac so you can
+open it in a browser. The scripts encode the operational story from the design so it's repeatable:
+`setup-cluster.sh` (create cluster + apply namespace/RBAC), `create-secret.sh` (push the token — read
+from the gitignored file, never committed), and `build-and-load.sh` (build both images and side-load them
+into `kind`, since kind has no registry). The per-user pod isn't a manifest here — the gateway creates it
+programmatically at runtime, which is the whole on-demand mechanic.
+
 **Files:**
 - Create: `kind-config.yaml`, `k8s/namespace.yaml`, `k8s/rbac.yaml`, `k8s/secret.example.yaml`, `k8s/gateway.yaml`, `scripts/setup-cluster.sh`, `scripts/create-secret.sh`, `scripts/build-and-load.sh`
 
@@ -1215,6 +1368,16 @@ git commit -m "feat(k8s): kind config, namespace, rbac, gateway manifests, scrip
 ---
 
 ## Task 7: End-to-end on kind + latency instrumentation
+
+**Context:** This is where the pieces become the thing you actually wanted to see and where you collect the
+answers to your original question ("where does the latency go?"). Everything before this was verified in
+isolation; now we run the full stack on `kind` and drive it like a user. The two-tab test is the payoff of
+the whole design — two names produce two pods you can *watch* appear in `kubectl get pods -w`, proving the
+per-user isolation mechanic with your own eyes. Then we capture the three numbers from spec §9 —
+cold-start (from the gateway log), the in-cluster hop (ping/pong), and the model-call latency (from the
+SDK's `duration_api_ms`/`ttft_ms`) — and write them back into the spec. The expected finding: the browser
+architecture adds almost nothing; cold-start is the only new cost, and the model call dominates exactly as
+it does in the terminal.
 
 - [ ] **Step 1: Bring up the cluster and workloads**
 
