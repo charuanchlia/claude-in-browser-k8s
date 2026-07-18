@@ -37,7 +37,7 @@ wss.on("connection", (ws: WebSocket) => {
 
   ws.on("message", async (raw) => {
     let msg: ClientMessage;
-    try { msg = JSON.parse(raw.toString()); } catch { return; }
+    try { msg = JSON.parse(raw.toString()); } catch { console.error("dropped malformed WS message:", raw.toString()); return; }
     if (msg.type === "prompt") session.sendPrompt(msg.text);
     else if (msg.type === "ping") send({ type: "pong", t: msg.t });
     else if (msg.type === "mcp.add") {
