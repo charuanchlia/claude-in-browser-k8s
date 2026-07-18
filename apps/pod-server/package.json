@@ -1,0 +1,13 @@
+{
+  "name": "@claude-lab/pod-server",
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": { "start": "tsx src/index.ts" },
+  "dependencies": {
+    "@claude-lab/agent-core": "*",
+    "@claude-lab/protocol": "*",
+    "@modelcontextprotocol/server-filesystem": "^2026.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": { "@types/ws": "^8.5.0" }
+}

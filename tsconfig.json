@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "packages/protocol" },
-    { "path": "packages/agent-core" }
+    { "path": "packages/agent-core" },
+    { "path": "apps/pod-server" }
   ]
 }
