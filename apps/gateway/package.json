@@ -1,0 +1,12 @@
+{
+  "name": "@claude-lab/gateway",
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": { "start": "tsx src/index.ts" },
+  "dependencies": {
+    "@claude-lab/protocol": "*",
+    "@kubernetes/client-node": "^0.22.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": { "@types/ws": "^8.5.0" }
+}
