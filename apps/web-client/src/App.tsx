@@ -12,19 +12,35 @@ export function App() {
   const [servers, setServers] = useState<{ name: string; status: string }[]>([]);
   const [status, setStatus] = useState("connecting…");
   const conn = useRef<ReturnType<typeof connect> | null>(null);
+  // Wall-clock time the most recent prompt was sent, so the matching `result`
+  // can report how long it actually took from the browser's own perspective —
+  // not just the server-reported api/ttft, which don't include the network hop.
+  const sentAt = useRef<number | null>(null);
 
   const onMsg = (m: ServerMessage) => {
     if (m.type === "session.status") setStatus(m.state === "ready" ? "ready" : `${m.state}: ${m.detail ?? ""}`);
     else if (m.type === "assistant") setLines((l) => [...l, { who: "claude", text: m.text }]);
     else if (m.type === "tool_call") setLines((l) => [...l, { who: "sys", text: `⚙︎ ${m.name}(${JSON.stringify(m.input)})` }]);
     else if (m.type === "mcp.status") setServers(m.servers);
-    else if (m.type === "result") setLines((l) => [...l, { who: "sys", text: `— done (api ${m.apiMs ?? "?"}ms, ttft ${m.ttftMs ?? "?"}ms)` }]);
+    else if (m.type === "result") {
+      const seenIn = sentAt.current != null ? Date.now() - sentAt.current : null;
+      sentAt.current = null;
+      const overhead = seenIn != null && m.apiMs != null ? Math.max(0, seenIn - m.apiMs) : null;
+      const seenLabel = seenIn != null ? `you saw it in ${(seenIn / 1000).toFixed(1)}s  ` : "";
+      const overheadLabel = overhead != null ? `network+queue ${(overhead / 1000).toFixed(1)}s · ` : "";
+      setLines((l) => [...l, { who: "sys", text: `— ${seenLabel}(${overheadLabel}model ttft ${m.ttftMs ?? "?"}ms, model total ${m.apiMs ?? "?"}ms)` }]);
+    }
     else if (m.type === "error") setLines((l) => [...l, { who: "sys", text: `⚠ ${m.message}` }]);
   };
 
   const join = () => { if (!username.trim()) return; conn.current = connect(username.trim(), onMsg); setJoined(true); };
   const send = (m: ClientMessage) => conn.current?.send(m);
-  const ask = (text: string) => { if (!text.trim()) return; setLines((l) => [...l, { who: "you", text }]); send({ type: "prompt", text }); };
+  const ask = (text: string) => {
+    if (!text.trim()) return;
+    sentAt.current = Date.now();
+    setLines((l) => [...l, { who: "you", text }]);
+    send({ type: "prompt", text });
+  };
 
   if (!joined) return (
     <div className="join">
