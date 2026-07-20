@@ -57,14 +57,25 @@ the pod runs everything real.
 
 ```
 Browser (React)  ──WS──►  Gateway pod  ──k8s API──►  create/delete per-user Pod
-      ▲                        │                              │
-      └──────proxied WS────────┴──────────────────────────►  Agent pod
-                                                              runs agent-core
+[§3.4]                    [§3.3 Gateway/            [§3.6 k8s resources:
+                            control plane]            ServiceAccount/Role/
+      ▲                        │                      RoleBinding, Secret]
+      │                        │                              │
+      └──────proxied WS────────┴──────────────────────────►  Agent pod  [§3.5 pod image]
+                                                              runs agent-core  [§3.1]
+                                                              via Shell A      [§3.2]
                                                               ├─ Agent SDK loop
                                                               ├─ tools (shell/files)
                                                               ├─ MCP clients
                                                               └─ CLAUDE_CODE_OAUTH_TOKEN ─► Anthropic API
 ```
+
+Box-to-component map: **Browser** = §3.4 React client. **Gateway pod** = §3.3 Gateway/control
+plane, running under the §3.6 k8s resources (ServiceAccount/Role/RoleBinding it uses to create/delete
+pods, and the Secret it doesn't touch directly but provisions into agent pods). **Agent pod** is built
+from the §3.5 pod image and runs two of the §3-components stacked: §3.2 Shell A (the WebSocket server)
+wrapping §3.1 agent-core (the transport-agnostic loop) — the diagram's "Agent SDK loop / tools / MCP
+clients" bullets are agent-core's internals, and the token env var is how §3.6's Secret reaches it.
 
 ### 3.1 Component: `agent-core` (shared package)
 
@@ -218,6 +229,32 @@ Instrument and record three numbers, then compare browser-served vs local:
 Expected finding to validate: (2) is negligible on `kind`; (3) dominates and equals terminal Claude
 Code; (1) is the only new cost the browser architecture introduces — the thing a future pre-warm pool
 would attack. When Shell B (Mac app) exists, rerun (3) locally to confirm it's apples-to-apples.
+
+### Measured results (2026-07-20, live `kind` cluster, real two-tab e2e run)
+
+| # | Metric | Measured | Method |
+|---|---|---|---|
+| 1 | **Pod cold-start** | **~1.0–2.1s** (median ~1.3s across 9 sessions, incl. the real two-tab run: `agent-charu` 1615ms, `agent-alex` 1587ms) | Gateway log: `ensurePod` start → pod `Running`+IP (`kubectl logs deploy/gateway \| grep cold-start`) |
+| 2 | **In-cluster hop** | **2ms median** (range 1–9ms, 20 samples) | `ping`/`pong` round trip over the real browser→gateway→pod path, `Date.now()` delta |
+| 3 | **Model-call latency** | **api 4.6–9.9s, ttft 2.4–2.5s** (varies with tool use: `charu`'s file-write-then-read task was 9868ms api/2541ms ttft; `alex`'s plain reply was 4580ms api/2392ms ttft) | `result` message's `duration_api_ms`/`ttft_ms`, straight from the SDK |
+
+**Finding confirmed.** (2) is negligible exactly as predicted — 2ms is noise compared to the other two
+numbers, so moving the UI to a browser costs nothing meaningful. (3) dominates and scales with what the
+model actually has to do (a tool-using task took ~2x longer than a plain reply) — this is identical to
+what terminal Claude Code pays, since it's the same API call. (1) is real but small (~1–2s) and is paid
+once per ephemeral session; it's the only genuinely new cost this architecture introduces, and it's
+exactly where a future pre-warm pool would help.
+
+**Bonus finding, not originally planned for §9:** the e2e run surfaced two real bugs that wouldn't show
+up in unit tests or isolated component smoke tests — a pod-connect race (`ensurePod` reports the
+container "Running" before `pod-server`'s own WebSocket server has finished binding its port, causing an
+immediate `ECONNREFUSED` on a fast connect) and a dropped-MCP-status bug (the SDK's `setMcpServers()`
+resolves with its own result rather than pushing a follow-up event, so `mcp.add` silently never updated
+the UI). Both are fixed (gateway now retries the pod connect with backoff; `pod-server` explicitly polls
+`session.getMcpStatus()` after `mcp.add`/`mcp.list` and once after connect) and re-verified live —
+the two-tab test above is from *after* both fixes, with the MCP panel showing real `connected` status for
+both the baked-in filesystem MCP and a newly-added remote MCP server. This is the value of an actual
+live e2e pass over trusting component-level tests alone.
 
 ---
 
