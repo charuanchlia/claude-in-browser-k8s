@@ -1,4 +1,4 @@
-import type { ClientMessage } from "@claude-lab/protocol";
+import type { ClientMessage } from "@claude-in-browser-k8s/protocol";
 
 export function McpPanel({ servers, onAdd }: {
   servers: { name: string; status: string }[];

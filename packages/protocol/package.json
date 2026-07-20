@@ -1,5 +1,5 @@
 {
-  "name": "@claude-lab/protocol",
+  "name": "@claude-in-browser-k8s/protocol",
   "version": "0.0.0",
   "type": "module",
   "main": "src/index.ts",

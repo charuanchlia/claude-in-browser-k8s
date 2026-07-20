@@ -1,5 +1,5 @@
 {
-  "name": "@claude-lab/agent-core",
+  "name": "@claude-in-browser-k8s/agent-core",
   "version": "0.0.0",
   "type": "module",
   "main": "src/index.ts",

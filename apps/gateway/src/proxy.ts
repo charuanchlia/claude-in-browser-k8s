@@ -1,5 +1,5 @@
 import { WebSocket } from "ws";
-import type { ServerMessage } from "@claude-lab/protocol";
+import type { ServerMessage } from "@claude-in-browser-k8s/protocol";
 
 const CONNECT_RETRY_MS = 300;
 const CONNECT_TIMEOUT_MS = 15_000;

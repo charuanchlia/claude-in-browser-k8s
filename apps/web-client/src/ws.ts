@@ -1,4 +1,4 @@
-import type { ClientMessage, ServerMessage } from "@claude-lab/protocol";
+import type { ClientMessage, ServerMessage } from "@claude-in-browser-k8s/protocol";
 
 export function connect(username: string, onMsg: (m: ServerMessage) => void): {
   send: (m: ClientMessage) => void; close: () => void;

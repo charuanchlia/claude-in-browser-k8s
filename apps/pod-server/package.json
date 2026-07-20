@@ -1,11 +1,11 @@
 {
-  "name": "@claude-lab/pod-server",
+  "name": "@claude-in-browser-k8s/pod-server",
   "version": "0.0.0",
   "type": "module",
   "scripts": { "start": "tsx src/index.ts" },
   "dependencies": {
-    "@claude-lab/agent-core": "*",
-    "@claude-lab/protocol": "*",
+    "@claude-in-browser-k8s/agent-core": "*",
+    "@claude-in-browser-k8s/protocol": "*",
     "@modelcontextprotocol/server-filesystem": "^2026.0.0",
     "ws": "^8.18.0"
   },

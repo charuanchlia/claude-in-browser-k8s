@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from "ws";
-import { createSession, type Session, type CoreEvent } from "@claude-lab/agent-core";
-import type { ClientMessage, ServerMessage, McpServerSpec } from "@claude-lab/protocol";
+import { createSession, type Session, type CoreEvent } from "@claude-in-browser-k8s/agent-core";
+import type { ClientMessage, ServerMessage, McpServerSpec } from "@claude-in-browser-k8s/protocol";
 import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk";
 
 const PORT = Number(process.env.PORT ?? 8080);

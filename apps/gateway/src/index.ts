@@ -2,7 +2,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { WebSocketServer } from "ws";
-import type { ClientMessage, ServerMessage } from "@claude-lab/protocol";
+import type { ClientMessage, ServerMessage } from "@claude-in-browser-k8s/protocol";
 import { podName } from "./podName.js";
 import { ensurePod, deletePod, sweepStalePods } from "./podManager.js";
 import { proxy } from "./proxy.js";

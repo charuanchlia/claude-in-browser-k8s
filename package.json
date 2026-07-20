@@ -1,5 +1,5 @@
 {
-  "name": "claude-lab",
+  "name": "claude-in-browser-k8s",
   "private": true,
   "type": "module",
   "workspaces": ["packages/*", "apps/*"],

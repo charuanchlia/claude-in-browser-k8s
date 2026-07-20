@@ -10,4 +10,4 @@ RUN chown -R node:node /app
 USER node
 ENV PORT=3000 CLIENT_DIR=/app/web-client/dist
 EXPOSE 3000
-CMD ["npm", "--workspace", "@claude-lab/gateway", "start"]
+CMD ["npm", "--workspace", "@claude-in-browser-k8s/gateway", "start"]

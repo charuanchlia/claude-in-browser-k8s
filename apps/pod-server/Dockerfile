@@ -13,4 +13,4 @@ RUN mkdir -p /workspace && chown -R node:node /app /workspace
 USER node
 ENV PORT=8080
 EXPOSE 8080
-CMD ["npm", "--workspace", "@claude-lab/pod-server", "start"]
+CMD ["npm", "--workspace", "@claude-in-browser-k8s/pod-server", "start"]

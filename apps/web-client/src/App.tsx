@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import type { ClientMessage, ServerMessage } from "@claude-lab/protocol";
+import type { ClientMessage, ServerMessage } from "@claude-in-browser-k8s/protocol";
 import { connect } from "./ws.js";
 import { McpPanel } from "./McpPanel.js";
 
