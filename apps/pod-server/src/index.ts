@@ -35,6 +35,16 @@ wss.on("connection", (ws: WebSocket) => {
   const session: Session = createSession((e) => send(coreToServer(e)), { cwd: "/workspace", mcpServers });
   send({ type: "session.status", state: "ready" });
 
+  // The system/init snapshot (translated to the first mcp.status) is taken
+  // before stdio MCP servers finish their handshake, so it's typically stuck
+  // on "pending". Push one real status update shortly after connect so the
+  // panel reflects the baked-in server's actual settled state.
+  setTimeout(() => {
+    session.getMcpStatus()
+      .then((servers) => send({ type: "mcp.status", servers }))
+      .catch(() => {}); // best-effort; the client can always send mcp.list
+  }, 5000);
+
   ws.on("message", async (raw) => {
     let msg: ClientMessage;
     try { msg = JSON.parse(raw.toString()); } catch { console.error("dropped malformed WS message:", raw.toString()); return; }
@@ -42,10 +52,18 @@ wss.on("connection", (ws: WebSocket) => {
     else if (msg.type === "ping") send({ type: "pong", t: msg.t });
     else if (msg.type === "mcp.add") {
       mcpServers[msg.name] = specToConfig(msg.server);
-      try { await session.setMcpServers(mcpServers); }
+      try {
+        await session.setMcpServers(mcpServers);
+        // setMcpServers() resolves with its own result rather than emitting a
+        // system/init-style event — fetch and push real status explicitly.
+        send({ type: "mcp.status", servers: await session.getMcpStatus() });
+      }
       catch (e) { send({ type: "error", message: `mcp.add failed: ${e instanceof Error ? e.message : e}` }); }
     }
-    // mcp.list: status is pushed as mcp.status on init and after setMcpServers.
+    else if (msg.type === "mcp.list") {
+      try { send({ type: "mcp.status", servers: await session.getMcpStatus() }); }
+      catch (e) { send({ type: "error", message: `mcp.list failed: ${e instanceof Error ? e.message : e}` }); }
+    }
   });
 
   ws.on("close", () => { session.dispose().catch(() => {}); });

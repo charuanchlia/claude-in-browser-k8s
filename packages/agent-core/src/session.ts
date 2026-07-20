@@ -7,9 +7,21 @@ export interface SessionOptions {
   mcpServers?: Record<string, McpServerConfig>;
 }
 
+export interface McpStatus { name: string; status: string }
+
 export interface Session {
   sendPrompt(text: string): void;
   setMcpServers(servers: Record<string, McpServerConfig>): Promise<void>;
+  /**
+   * Live MCP connection status. The SDK's `system/init` message (mapped to a
+   * `mcp_status` CoreEvent by translate.ts) is a one-shot snapshot taken at
+   * session start — servers that connect after it, or are added later via
+   * setMcpServers, never get a follow-up push through the event stream.
+   * setMcpServers() itself resolves with the real result instead of emitting
+   * an event. Callers that need current status (e.g. after adding a server)
+   * must poll this explicitly.
+   */
+  getMcpStatus(): Promise<McpStatus[]>;
   dispose(): Promise<void>;
 }
 
@@ -60,6 +72,10 @@ export function createSession(
       input.push(userMessage(text));
     },
     async setMcpServers(servers) { await q.setMcpServers(servers); },
+    async getMcpStatus() {
+      const statuses = await q.mcpServerStatus();
+      return statuses.map((s) => ({ name: s.name, status: s.status }));
+    },
     async dispose() {
       if (disposed) return;
       disposed = true;
