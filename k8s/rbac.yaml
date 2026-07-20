@@ -8,6 +8,9 @@ metadata: { name: pod-manager, namespace: claude-lab }
 rules:
   - apiGroups: [""]
     resources: ["pods"]
+    # watch: unused today (ensurePod polls readNamespacedPod every 500ms instead)
+    # but read-only and reserved for a future watch-based ensurePod that'd be
+    # less chatty against the API server.
     verbs: ["get", "list", "watch", "create", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

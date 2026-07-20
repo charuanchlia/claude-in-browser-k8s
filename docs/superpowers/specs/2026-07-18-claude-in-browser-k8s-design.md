@@ -143,23 +143,30 @@ shell and the future Mac shell reuse.
 
 JSON messages, one channel. Gateway proxies transparently once the pod is ready.
 
+*(This section was written pre-implementation; the shapes below match what actually shipped —
+`packages/protocol/src/index.ts` is the source of truth. Notable differences from the original draft:
+`mcp.add`'s server config nests under `server`, not inline; no separate `mcp.reconnect`/`mcp.disable`
+messages were built; assistant output streams as whole `assistant` messages rather than per-token
+`token` events; and results arrive as one `result` message with `ok`/timing fields rather than a bare
+`done`.)*
+
 **Client → server**
 ```
 { "type": "hello", "username": "charu" }
 { "type": "prompt", "text": "..." }
-{ "type": "mcp.add", "server": { "name": "...", "transport": "http", "url": "..." } }
+{ "type": "mcp.add", "name": "...", "server": { "transport": "http", "url": "..." } }
 { "type": "mcp.list" }
-{ "type": "mcp.reconnect", "name": "..." } | { "type": "mcp.disable", "name": "..." }
+{ "type": "ping", "t": 1234 }
 ```
 
 **Server → client**
 ```
 { "type": "session.status", "state": "starting|ready|error", "detail": "..." }  // incl. cold-start
-{ "type": "token", "text": "..." }               // streamed model output
+{ "type": "assistant", "text": "..." }           // whole-message output, not token-streamed
 { "type": "tool_call", "name": "Bash", "input": {...} }
-{ "type": "tool_result", "name": "Bash", "ok": true }
-{ "type": "mcp.status", "servers": [ { "name": "...", "state": "connected|failed|disabled", "tools": 5 } ] }
-{ "type": "done" }
+{ "type": "mcp.status", "servers": [ { "name": "...", "status": "connected|failed|pending|needs-auth|disabled" } ] }
+{ "type": "result", "ok": true, "durationMs": 1200, "apiMs": 900, "ttftMs": 300 }
+{ "type": "pong", "t": 1234 }
 { "type": "error", "message": "..." }
 ```
 

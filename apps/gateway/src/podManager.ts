@@ -53,7 +53,15 @@ export async function deletePod(name: string): Promise<void> {
   try { await core.deleteNamespacedPod(name, NAMESPACE); } catch { /* already gone */ }
 }
 
-/** Startup safety net: delete stale agent pods. */
+/**
+ * Startup safety net: delete stale agent pods left behind by a previous gateway process.
+ *
+ * This is unconditional — it deletes every agent pod on startup, including ones serving a
+ * browser tab that's still open (that user's WebSocket just breaks; no reconnect logic
+ * exists client-side). Acceptable for this prototype (spec's stated non-goals: no HA, no
+ * persistence), but a real deployment would need the gateway to survive restarts without
+ * dropping live sessions — e.g. by tracking which pods have an active proxy connection.
+ */
 export async function sweepStalePods(): Promise<void> {
   const res = await core.listNamespacedPod(
     NAMESPACE,
