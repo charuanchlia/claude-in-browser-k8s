@@ -2,7 +2,20 @@
   "name": "@claude-in-browser-k8s/web-client",
   "version": "0.0.0",
   "type": "module",
-  "scripts": { "dev": "vite", "build": "vite build" },
-  "dependencies": { "react": "^19.2.0", "react-dom": "^19.2.0", "@claude-in-browser-k8s/protocol": "*" },
-  "devDependencies": { "@vitejs/plugin-react": "^6.0.0", "vite": "^8.1.0", "@types/react": "^19.2.0", "@types/react-dom": "^19.2.0" }
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@claude-in-browser-k8s/protocol": "*",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^6.0.0",
+    "rolldown": "~1.1.5",
+    "vite": "^8.1.0"
+  }
 }
