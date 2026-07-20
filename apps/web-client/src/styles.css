@@ -1,0 +1,18 @@
+:root { font-family: system-ui, sans-serif; color-scheme: light dark; }
+body { margin: 0; }
+.join { display: grid; gap: .75rem; place-content: center; height: 100vh; text-align: center; }
+.join input, .app input { padding: .5rem .7rem; font-size: 1rem; }
+.app { display: grid; grid-template-columns: 1fr 300px; height: 100vh; }
+.chat { display: flex; flex-direction: column; border-right: 1px solid #8884; }
+.chat header { padding: .6rem 1rem; border-bottom: 1px solid #8884; font-size: .85rem; }
+.status { opacity: .7; }
+.lines { flex: 1; overflow-y: auto; padding: 1rem; display: flex; flex-direction: column; gap: .5rem; }
+.line.you { align-self: flex-end; background: #3b6fe022; padding: .4rem .7rem; border-radius: 8px; }
+.line.claude { background: #0f8a7a22; padding: .4rem .7rem; border-radius: 8px; white-space: pre-wrap; }
+.line.sys { opacity: .6; font-size: .8rem; font-family: ui-monospace, monospace; }
+.chat form, .mcp form { display: flex; gap: .4rem; padding: .6rem 1rem; }
+.chat form input { flex: 1; }
+.mcp { padding: 1rem; display: flex; flex-direction: column; gap: .5rem; }
+.mcp form { flex-direction: column; padding: 0; }
+.mcp .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #999; margin-right: 4px; }
+.mcp .dot.connected { background: #17a34a; } .mcp .dot.failed { background: #dc2626; }
