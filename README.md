@@ -1,4 +1,4 @@
-# claude-lab
+# claude-in-browser-k8s
 
 Claude Code in a browser, with one ephemeral Kubernetes pod per user — a learning project that runs
 end-to-end on a local [`kind`](https://kind.sigs.k8s.io/) cluster.
