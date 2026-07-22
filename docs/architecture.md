@@ -98,22 +98,32 @@ Read each section as "what forces this?"
 
 ### Why a separate gateway tier (why not let the browser talk to pods directly)
 
-- **Browsers can't reach pods.** Pod IPs are internal to the cluster and ephemeral. Something inside the
-  cluster must be the stable, public entry point.
-- **Someone must decide "which pod is yours" and create it.** That's an authority the client can't have.
-  The gateway owns identity → pod mapping and holds the scoped ServiceAccount that's allowed to
-  create/delete pods.
-- **It keeps the k8s API private.** Only the gateway talks to the control plane; the client only ever
-  sees one WebSocket. Smaller attack surface, cleaner boundary.
+The short answer: **the browser can't create or reach your pod itself, and something trustworthy has
+to.** Concretely, three things only the gateway can do:
 
-Concretely, when you open the app and type a name, you're talking to the gateway the whole time — never
-directly to a pod. It reads your username, calls the Kubernetes API to create `agent-<yourname>`, waits
-for it to come up (the ~1–2s cold start you can watch in `kubectl get pods -w`), then gets out of the way
-and just relays bytes between your browser and your pod for the rest of the session
-(`apps/gateway/src/proxy.ts`). When you close the tab, the gateway notices the socket died and deletes
-your pod. The gateway never touches the model or your prompts' content — it's purely the **router +
-pod-lifecycle authority**, the one process trusted to mint and connect you to your own isolated pod, so
-nothing else needs elevated privileges or public exposure.
+1. **It's the one stable address.** When you open `http://localhost:30080`, that's *the gateway* — not
+   your pod. Your pod (`agent-<yourname>`) gets a cluster-internal IP that only exists after you connect
+   and that changes every session. A browser has no way to find or reach that IP directly; it needs one
+   fixed front door, and that's the gateway.
+2. **It's the one thing with permission to create/delete pods.** In this design, "type your name" is the
+   entire auth model — deliberately minimal (see below). But even so, *something* has to hold real
+   Kubernetes credentials (the gateway's ServiceAccount) to call `create Pod`/`delete Pod` on your behalf.
+   That authority can't live in the browser — a browser calling the Kubernetes API directly would mean
+   shipping cluster-admin-ish credentials to every visitor's tab.
+3. **It's the proxy, so pods stay locked down.** Once your pod exists, the gateway is the thing that
+   opens a second WebSocket to it and pipes your messages through (`apps/gateway/src/proxy.ts`). Your pod
+   never needs to be reachable from outside the cluster at all — only the gateway talks to it directly.
+
+**What you actually watch happen, mapped onto this:** when you type your name and hit "Start my pod,"
+you're talking to the gateway the whole time. It reads your username, calls the Kubernetes API to spin up
+`agent-<yourname>`, waits for it to come up (that's the ~1–2s cold start you can watch in
+`kubectl get pods -w`), then quietly gets out of the way and just relays bytes between your browser and
+your pod for the rest of the session. When you close the tab, the gateway notices the socket died and
+tells Kubernetes to delete your pod — that's the pod disappearing in the same watch terminal.
+
+So the gateway isn't doing "work" in the agentic sense — it never touches the model or your prompts'
+content. It's purely the **router + pod-lifecycle authority**: the one process trusted to mint and
+connect you to your own isolated pod, so nothing else needs elevated privileges or public exposure.
 
 **The one-line version:** UI in the browser because it needs no privilege and must be installable-free ·
 loop in a pod because it holds secrets, needs a shell/filesystem, and is stateful · one pod per user
