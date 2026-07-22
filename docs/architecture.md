@@ -106,10 +106,44 @@ Read each section as "what forces this?"
 - **It keeps the k8s API private.** Only the gateway talks to the control plane; the client only ever
   sees one WebSocket. Smaller attack surface, cleaner boundary.
 
+Concretely, when you open the app and type a name, you're talking to the gateway the whole time — never
+directly to a pod. It reads your username, calls the Kubernetes API to create `agent-<yourname>`, waits
+for it to come up (the ~1–2s cold start you can watch in `kubectl get pods -w`), then gets out of the way
+and just relays bytes between your browser and your pod for the rest of the session
+(`apps/gateway/src/proxy.ts`). When you close the tab, the gateway notices the socket died and deletes
+your pod. The gateway never touches the model or your prompts' content — it's purely the **router +
+pod-lifecycle authority**, the one process trusted to mint and connect you to your own isolated pod, so
+nothing else needs elevated privileges or public exposure.
+
 **The one-line version:** UI in the browser because it needs no privilege and must be installable-free ·
 loop in a pod because it holds secrets, needs a shell/filesystem, and is stateful · one pod per user
 because isolation is the whole product · Kubernetes because on-demand isolated environments is exactly
 its job · a gateway because someone trusted must route to and mint those pods.
+
+### The auth story — and a distinction worth being precise about
+
+**"The gateway is trusted" and "the browser is trusted" are different claims, and this design only makes
+the first one.**
+
+- The gateway is trusted **by Kubernetes** — it holds a real credential (its ServiceAccount token, set up
+  by the RBAC in `k8s/rbac.yaml`), and the k8s API believes whoever presents that token. That trust is
+  earned by *possessing a secret the browser never sees*.
+- The browser is trusted by the gateway for **exactly one thing: a self-reported username string**, with
+  zero verification. The entire check, in `apps/gateway/src/index.ts`, is:
+  ```ts
+  if (hello.type !== "hello" || !hello.username) { /* reject */ }
+  ```
+  Any non-empty string is accepted. If you type `alex`, the gateway hands you `alex`'s pod — no password,
+  no session token, nothing stopping you from typing someone else's name and reaching their pod instead
+  of your own.
+
+So: the architecture correctly keeps the *dangerous* capability — creating/deleting pods, touching the
+k8s API — behind the one tier where a real credential guards it. It does **not** verify who's making the
+request. That's a deliberate, stated non-goal (see the design spec's non-goals: "real authentication —
+username only, no passwords/OIDC"), not an oversight — but it means "the gateway is trustworthy" and "the
+system has real auth" are two different statements, and only the first is true here. A production version
+of this would need the gateway to authenticate the *browser* (a login, a signed session cookie) before it
+authenticates *itself* to Kubernetes — this project only built the second half.
 
 ---
 
