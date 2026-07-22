@@ -145,6 +145,35 @@ system has real auth" are two different statements, and only the first is true h
 of this would need the gateway to authenticate the *browser* (a login, a signed session cookie) before it
 authenticates *itself* to Kubernetes — this project only built the second half.
 
+### What adding real auth would actually change
+
+The fix is narrow: insert a verification step *before* `hello.username` gets trusted. Nothing about pod
+creation, the proxy, or `agent-core` needs to change.
+
+1. **The browser gets a real credential first.** Before opening the WebSocket, the client authenticates
+   (OAuth login, or a simple username/password backed by a user table) and receives a **signed session
+   token** — not just a string it can type.
+2. **`hello` carries that token, not a bare username:** `{ "type": "hello", "token": "<signed JWT>" }`.
+3. **The gateway verifies the token before doing anything else**, in the same spot in
+   `apps/gateway/src/index.ts` that currently just checks `!hello.username`. Verification means checking
+   the token's signature against a secret/public key only the gateway holds, and reading the username out
+   of the token's *verified* claims — never out of a field the client supplied directly.
+4. **`podName()` is unchanged** — same DNS-safe sanitization — except its input now comes from the
+   verified identity instead of user input.
+
+**What this would and wouldn't protect, precisely:**
+
+| | With real auth |
+|---|---|
+| **Which pod you land on** | ✅ Protected. Nobody can type someone else's username and reach their pod — the pod name is derived from a cryptographically verified identity, not a self-reported string. |
+| **Accountability / quotas** | ✅ Protected. "User X created N pods today" becomes a real, non-forgeable statement — useful for rate limits, billing, audit logs. |
+| **Messages sent after the handshake succeeds** | ❌ Still not re-verified per message. Auth here is a **connection-time gate** — once `hello` passes, every later message on that socket is trusted as "whoever authenticated `hello`." That's normal for session-based systems, not a gap specific to this design. |
+| **The gateway's own k8s credential, or pod-to-pod isolation** | ❌ Unaffected either way. Those come from RBAC (`k8s/rbac.yaml`) and Kubernetes' own pod boundaries — separate concerns that already hold regardless of how users authenticate. |
+
+The short version: real auth would fix *identity* (which pod you can reach) and *accountability* (who did
+what) — it would not, by itself, add per-message authorization or change anything about pod isolation.
+Those already come from elsewhere in the design.
+
 ---
 
 ## 3. The flow of one session
